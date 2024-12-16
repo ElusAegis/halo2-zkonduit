@@ -8,8 +8,8 @@ use ff::PrimeField;
 use group::ff::Field;
 use halo2_proofs::{
     circuit::{AssignedCell, Chip, Layouter},
-    plonk::Error,
 };
+use halo2_proofs::plonk::ErrorFront as Error;
 
 mod pow5;
 pub use pow5::{Pow5Chip, Pow5Config, StateWord};

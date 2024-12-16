@@ -66,8 +66,3 @@ harness = false
 [[bench]]
 name = "poseidon"
 harness = false
-
-[[bench]]
-name = "sha256"
-harness = false
-required-features = ["unstable"]

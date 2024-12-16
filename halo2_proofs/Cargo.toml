@@ -1,11 +1,12 @@
 [package]
 name = "halo2_proofs"
-version = "0.3.0"
+version = "0.4.0"
 authors = [
     "Sean Bowe <sean@electriccoin.co>",
     "Ying Tong Lai <yingtong@electriccoin.co>",
     "Daira Hopwood <daira@electriccoin.co>",
     "Jack Grigg <jack@electriccoin.co>",
+    "Privacy Scaling Explorations team",
 ]
 edition = "2021"
 rust-version = "1.66.0"
@@ -13,8 +14,8 @@ description = """
 Fast PLONK-based zero-knowledge proving system with no trusted setup
 """
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/zcash/halo2"
-documentation = "https://docs.rs/halo2_proofs"
+repository = "https://github.com/privacy-scaling-explorations/halo2"
+documentation = "https://privacy-scaling-explorations.github.io/halo2/"
 readme = "README.md"
 categories = ["cryptography"]
 keywords = ["halo", "proofs", "zkp", "zkSNARKs"]
@@ -22,10 +23,6 @@ keywords = ["halo", "proofs", "zkp", "zkSNARKs"]
 [package.metadata.docs.rs]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs", "--html-in-header", "katex-header.html"]
-
-[[bench]]
-name = "arithmetic"
-harness = false
 
 [[bench]]
 name = "commit_zk"
@@ -48,70 +45,69 @@ name = "fft"
 harness = false
 
 [dependencies]
-log = { version = "0.4.17", default_features = false }
-backtrace = { version = "0.3", optional = true }
-ff = "0.13"
+halo2_middleware = { path = "../halo2_middleware" }
+halo2_backend = { path = "../halo2_backend", default-features = false }
+halo2_frontend = { path = "../halo2_frontend", default-features = false }
+# TODO - consider just using the 0.7.0 version tag (ask Dante)
+#halo2curves = { git = "https://github.com/privacy-scaling-explorations/halo2curves", rev="b753a832e92d5c86c5c997327a9cf9de86a18851", default-features = false }
+halo2curves = { version = "0.7.0", default-features = false }
+rand_core = { version = "0.6", default-features = false } # TODO - understand why the "getrandom" was made mandatory (may be just to simplify the code?)
 group = "0.13"
-halo2curves = { git = "https://github.com/privacy-scaling-explorations/halo2curves", rev="b753a832e92d5c86c5c997327a9cf9de86a18851", default-features = false }
-rand_core = { version = "0.6", default-features = false }
-tracing = "0.1"
-blake2b_simd = "1" # MSRV 1.66.0
-sha3 = "0.9.1"
-rand_chacha = "0.3"
-maybe-rayon = { version = "0.1.1"}
-env_logger = "0.10.0"
+lazy_static = { version = "1.4.0", optional = true }
 rustc-hash = "2.0.0"
-lazy_static = "1.4.0"
-# GPU Icicle integration
-icicle = { git = "https://github.com/ingonyama-zk/icicle.git", branch = "rust/large-bucket-factor-msm", optional = true }
-rustacuda = { version = "0.1", optional = true }
-serde_derive = { version = "1", optional = true}
-bincode = { version = "1.3.3", default_features = false }
-serde = { version = "1.0.126", features = ["derive"] }
-instant = { version = "0.1" }
-
 
 # Developer tooling dependencies
-plotters = { version = "0.3.0", default-features = false, optional = true }
-tabbycat = { version = "0.1", features = ["attributes"], optional = true }
+plotters = { version = "0.3.0", default-features = false, optional = true } # TODO - consider moving to dev dependency
 
-# Legacy circuit compatibility
-halo2_legacy_pdqsort = { version = "0.1.0", optional = true }
+log = { version = "0.4.17", default-features = false } # TODO - consider removing after soring out the `keygen.rs` file
 
 [dev-dependencies]
+ff = "0.13"
+tracing = "0.1" # TODO - understand how this is used and may be remove. (I only see in other crates usage)
+rand_chacha = "0.3"
+maybe-rayon = { version = "0.1.1"} # TODO - should it be moved to dev dependencies? And also to halo2_backend?
 assert_matches = "1.5"
 criterion = "0.3"
 gumdrop = "0.8"
 proptest = "1"
 rand_core = { version = "0.6", default-features = false, features = ["getrandom"] }
 serde_json = "1"
+halo2_debug = { path = "../halo2_debug" }
+env_logger = "0.10.0"
+instant = { version = "0.1" }
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dev-dependencies]
 getrandom = { version = "0.2", features = ["js"] }
 
 [features]
-default = ["batch", "bits", "derive_serde"]
-dev-graph = ["plotters", "tabbycat"]
+# TODO - consider if we need `"lookup-any-sanity-checks"` by default
+# TODO - why do we need `"derive_serde"` by default?
+default = ["batch", "bits", "derive_serde", "halo2_frontend/default", "halo2_backend/default"]
+dev-graph = ["halo2_frontend/dev-graph", "plotters"]
 test-dev-graph = [
+    "halo2_frontend/test-dev-graph",
     "dev-graph",
     "plotters/bitmap_backend",
     "plotters/bitmap_encoder",
-    "plotters/ttf",
+    "plotters/ttf"
 ]
-asm = ["halo2curves/asm"]
-bits = ["halo2curves/bits"]
-gadget-traces = ["backtrace"]
-thread-safe-region = []
-sanity-checks = []
-batch = ["rand_core/getrandom"]
-circuit-params = []
-counter = []
-icicle_gpu = ["icicle", "rustacuda"]
-mv-lookup = []
-cost-estimator = ["serde_derive"]
-derive_serde = ["halo2curves/derive_serde"]
-parallel-poly-read = []
-precompute-coset = []
+bits = ["halo2curves/bits", "halo2_frontend/bits", "halo2_backend/bits"]
+gadget-traces = ["halo2_frontend/gadget-traces"]
+thread-safe-region = ["halo2_frontend/thread-safe-region"]
+sanity-checks = ["halo2_backend/sanity-checks"]
+batch = ["rand_core/getrandom", "halo2_backend/batch"]
+circuit-params = ["halo2_frontend/circuit-params"]
+cost-estimator = ["halo2_frontend/cost-estimator"]
+derive_serde = ["halo2curves/derive_serde", "halo2_frontend/derive_serde", "halo2_backend/derive_serde"]
+vector-tests = [] # TODO - ask Adria about this feature as this seems to be a bug as it is not used
+lookup-any-sanity-checks = ["halo2_frontend/lookup-any-sanity-checks"] # TODO - consider if we need this feature
+# Custom EZKL features
+counter = ["lazy_static"] # TODO - consider moving to `halo2_backend` (need to resolve halo2_proofs/src/plonk/prover.rs)
+asm = ["halo2curves/asm", "halo2_backend/asm", "halo2_frontend/asm"]
+icicle_gpu = ["halo2_backend/icicle_gpu"]
+mv-lookup = ["halo2_backend/mv-lookup", "halo2_frontend/mv-lookup", "halo2_debug/mv-lookup"]
+parallel-poly-read = ["halo2_backend/parallel-poly-read"]
+precompute-coset = ["halo2_backend/precompute-cosets"]
 
 [lib]
 bench = false

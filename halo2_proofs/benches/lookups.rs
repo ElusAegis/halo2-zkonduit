@@ -23,6 +23,7 @@ use halo2_proofs::{
 use std::marker::PhantomData;
 
 use criterion::{BenchmarkId, Criterion};
+use halo2_backend::poly::kzg::commitment::ParamsVerifierKZG;
 
 fn criterion_benchmark(c: &mut Criterion) {
     #[derive(Clone, Default)]
@@ -148,7 +149,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     }
                     Ok(())
                 },
-            )
+            ).into()
         }
     }
 
@@ -174,7 +175,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             params,
             pk,
             &[circuit],
-            &[&[]],
+            &[vec![]],
             rng,
             &mut transcript,
         )
@@ -182,16 +183,16 @@ fn criterion_benchmark(c: &mut Criterion) {
         transcript.finalize()
     }
 
-    fn verifier(params: &ParamsKZG<Bn256>, vk: &VerifyingKey<G1Affine>, proof: &[u8]) {
+    fn verifier(params: &ParamsVerifierKZG<Bn256>, vk: &VerifyingKey<G1Affine>, proof: &[u8]) {
         let strategy = SingleStrategy::new(params);
         let mut transcript = Blake2bRead::<_, _, Challenge255<G1Affine>>::init(proof);
         assert!(verify_proof::<
             KZGCommitmentScheme<Bn256>,
-            VerifierGWC<'_, Bn256>,
+            VerifierGWC<Bn256>,
             Challenge255<G1Affine>,
             Blake2bRead<&[u8], G1Affine, Challenge255<G1Affine>>,
-            SingleStrategy<'_, Bn256>,
-        >(params, vk, strategy, &[&[]], &mut transcript, params.n())
+            SingleStrategy<Bn256>,
+        >(params, vk, strategy, &[vec![]], &mut transcript, params.n())
         .is_ok());
     }
 

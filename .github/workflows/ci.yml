@@ -17,10 +17,9 @@ jobs:
         os: [ubuntu-latest, windows-latest, macOS-latest]
         include:
           - feature_set: basic
-            features: batch,dev-graph,gadget-traces
+            features: --features batch,dev-graph,gadget-traces
           - feature_set: all
-            features: batch,dev-graph,gadget-traces,test-dev-graph,thread-safe-region,sanity-checks,circuit-params
-
+            features: --all-features
     steps:
       - uses: actions/checkout@v3
       - uses: actions-rs/toolchain@v1
@@ -30,7 +29,7 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: test
-          args: --verbose --release --workspace --no-default-features --features "${{ matrix.features }}"
+          args: --verbose --release --workspace --no-default-features ${{ matrix.features }}
 
   build:
     name: Build target ${{ matrix.target }}
@@ -46,6 +45,7 @@ jobs:
       - uses: actions-rs/toolchain@v1
         with:
           override: false
+          default: true
       - name: Add target
         run: rustup target add ${{ matrix.target }}
       - name: cargo build
@@ -53,11 +53,6 @@ jobs:
         with:
           command: build
           args: --no-default-features --features batch,dev-graph,gadget-traces --target ${{ matrix.target }}
-      - name: cargo build mv-lookup
-        uses: actions-rs/cargo@v1
-        with:
-          command: build
-          args: --no-default-features --features batch,dev-graph,gadget-traces,mv-lookup --target ${{ matrix.target }}
 
   bitrot:
     name: Bitrot check
@@ -73,7 +68,7 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: build
-          args: --benches --examples
+          args: --benches --examples --all-features
 
   doc-links:
     name: Intra-doc links

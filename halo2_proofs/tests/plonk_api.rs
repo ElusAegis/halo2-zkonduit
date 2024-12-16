@@ -3,23 +3,29 @@
 
 use assert_matches::assert_matches;
 use ff::{FromUniformBytes, WithSmallOrderMulGroup};
+use halo2_debug::test_rng;
+use halo2_middleware::zal::{
+    impls::{PlonkEngine, PlonkEngineConfig},
+    traits::MsmAccel,
+};
 use halo2_proofs::arithmetic::Field;
 use halo2_proofs::circuit::{Cell, Layouter, SimpleFloorPlanner, Value};
 use halo2_proofs::dev::MockProver;
 use halo2_proofs::plonk::{
-    create_proof as create_plonk_proof, keygen_pk, keygen_vk, verify_proof as verify_plonk_proof,
-    Advice, Assigned, Circuit, Column, ConstraintSystem, Error, Fixed, ProvingKey, TableColumn,
-    VerifyingKey,
+    create_proof_with_engine as create_plonk_proof_with_engine, keygen_pk, keygen_vk,
+    verify_proof as verify_plonk_proof, Advice, Assigned, Circuit, Column, ConstraintSystem, Error,
+    ErrorFront, Fixed, ProvingKey, TableColumn, VerifyingKey,
 };
-use halo2_proofs::poly::commitment::{CommitmentScheme, Params, ParamsProver, Prover, Verifier};
+use halo2_proofs::poly::commitment::{CommitmentScheme, ParamsProver, Prover, Verifier};
 use halo2_proofs::poly::Rotation;
 use halo2_proofs::poly::VerificationStrategy;
 use halo2_proofs::transcript::{
     Blake2bRead, Blake2bWrite, Challenge255, EncodedChallenge, TranscriptReadBuffer,
     TranscriptWriterBuffer,
 };
-use rand_core::{OsRng, RngCore};
+use rand_core::RngCore;
 use std::marker::PhantomData;
+use halo2_backend::poly::commitment::Params;
 
 #[test]
 fn plonk_api() {
@@ -27,6 +33,7 @@ fn plonk_api() {
 
     /// This represents an advice column at a certain row in the ConstraintSystem
     #[derive(Copy, Clone, Debug)]
+    #[allow(dead_code)]
     pub struct Variable(Column<Advice>, usize);
 
     #[derive(Clone)]
@@ -51,25 +58,34 @@ fn plonk_api() {
             &self,
             layouter: &mut impl Layouter<FF>,
             f: F,
-        ) -> Result<(Cell, Cell, Cell), Error>
+        ) -> Result<(Cell, Cell, Cell), ErrorFront>
         where
             F: FnMut() -> Value<(Assigned<FF>, Assigned<FF>, Assigned<FF>)>;
         fn raw_add<F>(
             &self,
             layouter: &mut impl Layouter<FF>,
             f: F,
-        ) -> Result<(Cell, Cell, Cell), Error>
+        ) -> Result<(Cell, Cell, Cell), ErrorFront>
         where
             F: FnMut() -> Value<(Assigned<FF>, Assigned<FF>, Assigned<FF>)>;
-        fn copy(&self, layouter: &mut impl Layouter<FF>, a: Cell, b: Cell) -> Result<(), Error>;
-        fn public_input<F>(&self, layouter: &mut impl Layouter<FF>, f: F) -> Result<Cell, Error>
+        fn copy(
+            &self,
+            layouter: &mut impl Layouter<FF>,
+            a: Cell,
+            b: Cell,
+        ) -> Result<(), ErrorFront>;
+        fn public_input<F>(
+            &self,
+            layouter: &mut impl Layouter<FF>,
+            f: F,
+        ) -> Result<Cell, ErrorFront>
         where
             F: FnMut() -> Value<FF>;
         fn lookup_table(
             &self,
             layouter: &mut impl Layouter<FF>,
             values: &[FF],
-        ) -> Result<(), Error>;
+        ) -> Result<(), ErrorFront>;
     }
 
     #[derive(Clone)]
@@ -97,7 +113,7 @@ fn plonk_api() {
             &self,
             layouter: &mut impl Layouter<FF>,
             mut f: F,
-        ) -> Result<(Cell, Cell, Cell), Error>
+        ) -> Result<(Cell, Cell, Cell), ErrorFront>
         where
             F: FnMut() -> Value<(Assigned<FF>, Assigned<FF>, Assigned<FF>)>,
         {
@@ -151,7 +167,7 @@ fn plonk_api() {
             &self,
             layouter: &mut impl Layouter<FF>,
             mut f: F,
-        ) -> Result<(Cell, Cell, Cell), Error>
+        ) -> Result<(Cell, Cell, Cell), ErrorFront>
         where
             F: FnMut() -> Value<(Assigned<FF>, Assigned<FF>, Assigned<FF>)>,
         {
@@ -211,7 +227,7 @@ fn plonk_api() {
             layouter: &mut impl Layouter<FF>,
             left: Cell,
             right: Cell,
-        ) -> Result<(), Error> {
+        ) -> Result<(), ErrorFront> {
             layouter.assign_region(
                 || "copy",
                 |mut region| {
@@ -220,7 +236,11 @@ fn plonk_api() {
                 },
             )
         }
-        fn public_input<F>(&self, layouter: &mut impl Layouter<FF>, mut f: F) -> Result<Cell, Error>
+        fn public_input<F>(
+            &self,
+            layouter: &mut impl Layouter<FF>,
+            mut f: F,
+        ) -> Result<Cell, ErrorFront>
         where
             F: FnMut() -> Value<FF>,
         {
@@ -243,7 +263,7 @@ fn plonk_api() {
             &self,
             layouter: &mut impl Layouter<FF>,
             values: &[FF],
-        ) -> Result<(), Error> {
+        ) -> Result<(), ErrorFront> {
             layouter.assign_table(
                 || "",
                 |mut table| {
@@ -369,7 +389,7 @@ fn plonk_api() {
             &self,
             config: PlonkConfig,
             mut layouter: impl Layouter<F>,
-        ) -> Result<(), Error> {
+        ) -> Result<(), ErrorFront> {
             let cs = StandardPlonk::new(config);
 
             let _ = cs.public_input(&mut layouter, || Value::known(F::ONE + F::ONE))?;
@@ -421,9 +441,9 @@ fn plonk_api() {
             let much_too_small_params= <$scheme as CommitmentScheme>::ParamsProver::new(1);
             assert_matches!(
                 keygen_vk(&much_too_small_params, &empty_circuit),
-                Err(Error::NotEnoughRowsAvailable {
+                Err(Error::Frontend(ErrorFront::NotEnoughRowsAvailable {
                     current_k,
-                }) if current_k == 1
+                })) if current_k == 1
             );
 
             // Check that we get an error if we try to initialize the proving key with a value of
@@ -431,9 +451,9 @@ fn plonk_api() {
             let slightly_too_small_params = <$scheme as CommitmentScheme>::ParamsProver::new(K-1);
             assert_matches!(
                 keygen_vk(&slightly_too_small_params, &empty_circuit),
-                Err(Error::NotEnoughRowsAvailable {
+                Err(Error::Frontend(ErrorFront::NotEnoughRowsAvailable {
                     current_k,
-                }) if current_k == K - 1
+                })) if current_k == K - 1
             );
         }};
     }
@@ -454,6 +474,55 @@ fn plonk_api() {
         keygen_pk(params, vk, &empty_circuit).expect("keygen_pk should not fail")
     }
 
+    fn create_proof_with_engine<
+        'params,
+        Scheme: CommitmentScheme,
+        P: Prover<'params, Scheme>,
+        E: EncodedChallenge<Scheme::Curve>,
+        R: RngCore,
+        T: TranscriptWriterBuffer<Vec<u8>, Scheme::Curve, E>,
+        M: MsmAccel<Scheme::Curve> + Sync,
+    >(
+        engine: PlonkEngine<Scheme::Curve, M>,
+        rng: R,
+        params: &'params Scheme::ParamsProver,
+        pk: &ProvingKey<Scheme::Curve>,
+    ) -> Vec<u8>
+    where
+        Scheme::Scalar: Ord + WithSmallOrderMulGroup<3> + FromUniformBytes<64>,
+        Scheme::ParamsProver: Send + Sync,
+    {
+        let (a, instance_val, lookup_table) = common!(Scheme);
+
+        let circuit: MyCircuit<Scheme::Scalar> = MyCircuit {
+            a: Value::known(a),
+            lookup_table,
+        };
+
+        let mut transcript = T::init(vec![]);
+
+        let instance = [vec![vec![instance_val]], vec![vec![instance_val]]];
+        create_plonk_proof_with_engine::<Scheme, P, _, _, _, _, _>(
+            engine,
+            params,
+            pk,
+            &[circuit.clone(), circuit.clone()],
+            &instance,
+            rng,
+            &mut transcript,
+        )
+        .expect("proof generation should not fail");
+
+        // Check this circuit is satisfied.
+        let prover = match MockProver::run(K, &circuit, vec![vec![instance_val]]) {
+            Ok(prover) => prover,
+            Err(e) => panic!("{e:?}"),
+        };
+        assert_eq!(prover.verify(), Ok(()));
+
+        transcript.finalize()
+    }
+
     fn create_proof<
         'params,
         Scheme: CommitmentScheme,
@@ -468,34 +537,10 @@ fn plonk_api() {
     ) -> Vec<u8>
     where
         Scheme::Scalar: Ord + WithSmallOrderMulGroup<3> + FromUniformBytes<64>,
+        Scheme::ParamsProver: Send + Sync,
     {
-        let (a, instance, lookup_table) = common!(Scheme);
-
-        let circuit: MyCircuit<Scheme::Scalar> = MyCircuit {
-            a: Value::known(a),
-            lookup_table,
-        };
-
-        let mut transcript = T::init(vec![]);
-
-        create_plonk_proof::<Scheme, P, _, _, _, _>(
-            params,
-            pk,
-            &[circuit.clone(), circuit.clone()],
-            &[&[&[instance]], &[&[instance]]],
-            rng,
-            &mut transcript,
-        )
-        .expect("proof generation should not fail");
-
-        // Check this circuit is satisfied.
-        let prover = match MockProver::run(K, &circuit, vec![vec![instance]]) {
-            Ok(prover) => prover,
-            Err(e) => panic!("{e:?}"),
-        };
-        assert_eq!(prover.verify(), Ok(()));
-
-        transcript.finalize()
+        let engine = PlonkEngineConfig::build_default();
+        create_proof_with_engine::<Scheme, P, _, _, T, _>(engine, rng, params, pk)
     }
 
     fn verify_proof<
@@ -513,81 +558,91 @@ fn plonk_api() {
     ) where
         Scheme::Scalar: Ord + WithSmallOrderMulGroup<3> + FromUniformBytes<64>,
     {
-        let (_, instance, _) = common!(Scheme);
-        let pubinputs = [instance];
+        let (_, instance_val, _) = common!(Scheme);
 
         let mut transcript = T::init(proof);
+        let instance = [vec![vec![instance_val]], vec![vec![instance_val]]];
 
         let strategy = Strategy::new(params_verifier);
-        let strategy = verify_plonk_proof(
-            params_verifier,
-            vk,
-            strategy,
-            &[&[&pubinputs[..]], &[&pubinputs[..]]],
-            &mut transcript,
-            params_verifier.n(),
-        )
-        .unwrap();
+        let strategy =
+            verify_plonk_proof(params_verifier, vk, strategy, &instance, &mut transcript, params_verifier.n()).unwrap();
 
         assert!(strategy.finalize());
     }
 
     fn test_plonk_api_gwc() {
-        use halo2_proofs::poly::kzg::commitment::{KZGCommitmentScheme, ParamsKZG};
-        use halo2_proofs::poly::kzg::multiopen::{ProverGWC, VerifierGWC};
-        use halo2_proofs::poly::kzg::strategy::AccumulatorStrategy;
-        use halo2curves::bn256::Bn256;
+        halo2_debug::test_result(
+            || {
+                use halo2_proofs::poly::kzg::commitment::{KZGCommitmentScheme, ParamsKZG};
+                use halo2_proofs::poly::kzg::multiopen::{ProverGWC, VerifierGWC};
+                use halo2_proofs::poly::kzg::strategy::AccumulatorStrategy;
+                use halo2curves::bn256::Bn256;
 
-        type Scheme = KZGCommitmentScheme<Bn256>;
-        bad_keys!(Scheme);
+                type Scheme = KZGCommitmentScheme<Bn256>;
 
-        let params = ParamsKZG::<Bn256>::new(K);
-        let rng = OsRng;
+                bad_keys!(Scheme);
 
-        let pk = keygen::<KZGCommitmentScheme<_>>(&params);
+                let mut rng = test_rng();
 
-        let proof = create_proof::<_, ProverGWC<_>, _, _, Blake2bWrite<_, _, Challenge255<_>>>(
-            rng, &params, &pk,
+                let params = ParamsKZG::<Bn256>::setup(K, &mut rng);
+                let pk = keygen::<KZGCommitmentScheme<_>>(&params);
+
+                let proof =
+                    create_proof::<_, ProverGWC<_>, _, _, Blake2bWrite<_, _, Challenge255<_>>>(
+                        &mut rng, &params, &pk,
+                    );
+
+                let verifier_params = params.verifier_params();
+
+                verify_proof::<
+                    _,
+                    VerifierGWC<_>,
+                    _,
+                    Blake2bRead<_, _, Challenge255<_>>,
+                    AccumulatorStrategy<_>,
+                >(&verifier_params, pk.get_vk(), &proof[..]);
+
+                proof
+            },
+            "f87ba1010dede5a2148ed94403ca12a566d3154ebb12ccb6c20a330e9b280af8",
         );
-
-        let verifier_params = params.verifier_params();
-
-        verify_proof::<
-            _,
-            VerifierGWC<_>,
-            _,
-            Blake2bRead<_, _, Challenge255<_>>,
-            AccumulatorStrategy<_>,
-        >(verifier_params, pk.get_vk(), &proof[..]);
     }
 
     fn test_plonk_api_shplonk() {
-        use halo2_proofs::poly::kzg::commitment::{KZGCommitmentScheme, ParamsKZG};
-        use halo2_proofs::poly::kzg::multiopen::{ProverSHPLONK, VerifierSHPLONK};
-        use halo2_proofs::poly::kzg::strategy::AccumulatorStrategy;
-        use halo2curves::bn256::Bn256;
+        halo2_debug::test_result(
+            || {
+                use halo2_proofs::poly::kzg::commitment::{KZGCommitmentScheme, ParamsKZG};
+                use halo2_proofs::poly::kzg::multiopen::{ProverSHPLONK, VerifierSHPLONK};
+                use halo2_proofs::poly::kzg::strategy::AccumulatorStrategy;
+                use halo2curves::bn256::Bn256;
 
-        type Scheme = KZGCommitmentScheme<Bn256>;
-        bad_keys!(Scheme);
+                type Scheme = KZGCommitmentScheme<Bn256>;
+                bad_keys!(Scheme);
 
-        let params = ParamsKZG::<Bn256>::new(K);
-        let rng = OsRng;
+                let mut rng = test_rng();
+                let params = ParamsKZG::<Bn256>::setup(K, &mut rng);
 
-        let pk = keygen::<KZGCommitmentScheme<_>>(&params);
+                let pk = keygen::<KZGCommitmentScheme<_>>(&params);
 
-        let proof = create_proof::<_, ProverSHPLONK<_>, _, _, Blake2bWrite<_, _, Challenge255<_>>>(
-            rng, &params, &pk,
+                let proof =
+                    create_proof::<_, ProverSHPLONK<_>, _, _, Blake2bWrite<_, _, Challenge255<_>>>(
+                        rng, &params, &pk,
+                    );
+
+                let verifier_params = params.verifier_params();
+
+                verify_proof::<
+                    _,
+                    VerifierSHPLONK<_>,
+                    _,
+                    Blake2bRead<_, _, Challenge255<_>>,
+                    AccumulatorStrategy<_>,
+                >(&verifier_params, pk.get_vk(), &proof[..]);
+
+                proof
+            },
+            "0fc67d890faef0ef8ea7ef680cc566b2ab7dabef12fcceb74d3655a0fb08c708",
         );
-
-        let verifier_params = params.verifier_params();
-
-        verify_proof::<
-            _,
-            VerifierSHPLONK<_>,
-            _,
-            Blake2bRead<_, _, Challenge255<_>>,
-            AccumulatorStrategy<_>,
-        >(verifier_params, pk.get_vk(), &proof[..]);
     }
 
     fn test_plonk_api_ipa() {
@@ -599,16 +654,57 @@ fn plonk_api() {
         type Scheme = IPACommitmentScheme<EqAffine>;
         bad_keys!(Scheme);
 
+        let mut rng = test_rng();
         let params = ParamsIPA::<EqAffine>::new(K);
-        let rng = OsRng;
 
         let pk = keygen::<IPACommitmentScheme<EqAffine>>(&params);
 
         let proof = create_proof::<_, ProverIPA<_>, _, _, Blake2bWrite<_, _, Challenge255<_>>>(
-            rng, &params, &pk,
+            &mut rng, &params, &pk,
         );
 
-        let verifier_params = params.verifier_params();
+        let verifier_params = params;
+
+        let pinned_vk_lookup_type_specifics : &'static str   = {
+            #[cfg(feature = "mv-lookup")]
+            {
+                r#"name: "lookup_0",
+                inputs_expressions: [
+                    [
+                        Var(
+                            Query(
+                                QueryBack {
+                                    index: 0,
+                                    column_index: 1,
+                                    column_type: Advice,
+                                    rotation: Rotation(
+                                        0,
+                                    ),
+                                },
+                            ),
+                        ),
+                    ],
+                ],"#
+            }
+            #[cfg(not(feature = "mv-lookup"))]
+            {
+                r#"name: "lookup",
+                input_expressions: [
+                    Var(
+                        Query(
+                            QueryBack {
+                                index: 0,
+                                column_index: 1,
+                                column_type: Advice,
+                                rotation: Rotation(
+                                    0,
+                                ),
+                            },
+                        ),
+                    ),
+                ],"#
+            }
+        };
 
         verify_proof::<
             _,
@@ -616,7 +712,491 @@ fn plonk_api() {
             _,
             Blake2bRead<_, _, Challenge255<_>>,
             AccumulatorStrategy<_>,
-        >(verifier_params, pk.get_vk(), &proof[..]);
+        >(&verifier_params, pk.get_vk(), &proof[..]);
+
+        // Check that the verification key has not changed unexpectedly
+        {
+            // panic!("{:#?}", pk.get_vk().pinned());
+            assert_eq!(
+                format!("{:#?}", pk.get_vk().pinned()),
+                format!("{}{}{}", r#"PinnedVerificationKey {
+    base_modulus: "0x40000000000000000000000000000000224698fc0994a8dd8c46eb2100000001",
+    scalar_modulus: "0x40000000000000000000000000000000224698fc094cf91b992d30ed00000001",
+    domain: PinnedEvaluationDomain {
+        k: 5,
+        extended_k: 7,
+        omega: 0x0cc3380dc616f2e1daf29ad1560833ed3baea3393eceb7bc8fa36376929b78cc,
+    },
+    cs: PinnedConstraintSystem {
+        num_fixed_columns: 7,
+        num_advice_columns: 5,
+        num_instance_columns: 1,
+        num_challenges: 0,
+        advice_column_phase: [
+            0,
+            0,
+            0,
+            0,
+            0,
+        ],
+        challenge_phase: [],
+        gates: [
+            Sum(
+                Sum(
+                    Sum(
+                        Sum(
+                            Product(
+                                Var(
+                                    Query(
+                                        QueryBack {
+                                            index: 0,
+                                            column_index: 1,
+                                            column_type: Advice,
+                                            rotation: Rotation(
+                                                0,
+                                            ),
+                                        },
+                                    ),
+                                ),
+                                Var(
+                                    Query(
+                                        QueryBack {
+                                            index: 0,
+                                            column_index: 2,
+                                            column_type: Fixed,
+                                            rotation: Rotation(
+                                                0,
+                                            ),
+                                        },
+                                    ),
+                                ),
+                            ),
+                            Product(
+                                Var(
+                                    Query(
+                                        QueryBack {
+                                            index: 1,
+                                            column_index: 2,
+                                            column_type: Advice,
+                                            rotation: Rotation(
+                                                0,
+                                            ),
+                                        },
+                                    ),
+                                ),
+                                Var(
+                                    Query(
+                                        QueryBack {
+                                            index: 1,
+                                            column_index: 3,
+                                            column_type: Fixed,
+                                            rotation: Rotation(
+                                                0,
+                                            ),
+                                        },
+                                    ),
+                                ),
+                            ),
+                        ),
+                        Product(
+                            Product(
+                                Var(
+                                    Query(
+                                        QueryBack {
+                                            index: 0,
+                                            column_index: 1,
+                                            column_type: Advice,
+                                            rotation: Rotation(
+                                                0,
+                                            ),
+                                        },
+                                    ),
+                                ),
+                                Var(
+                                    Query(
+                                        QueryBack {
+                                            index: 1,
+                                            column_index: 2,
+                                            column_type: Advice,
+                                            rotation: Rotation(
+                                                0,
+                                            ),
+                                        },
+                                    ),
+                                ),
+                            ),
+                            Var(
+                                Query(
+                                    QueryBack {
+                                        index: 2,
+                                        column_index: 1,
+                                        column_type: Fixed,
+                                        rotation: Rotation(
+                                            0,
+                                        ),
+                                    },
+                                ),
+                            ),
+                        ),
+                    ),
+                    Negated(
+                        Product(
+                            Var(
+                                Query(
+                                    QueryBack {
+                                        index: 2,
+                                        column_index: 3,
+                                        column_type: Advice,
+                                        rotation: Rotation(
+                                            0,
+                                        ),
+                                    },
+                                ),
+                            ),
+                            Var(
+                                Query(
+                                    QueryBack {
+                                        index: 3,
+                                        column_index: 4,
+                                        column_type: Fixed,
+                                        rotation: Rotation(
+                                            0,
+                                        ),
+                                    },
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+                Product(
+                    Var(
+                        Query(
+                            QueryBack {
+                                index: 4,
+                                column_index: 0,
+                                column_type: Fixed,
+                                rotation: Rotation(
+                                    0,
+                                ),
+                            },
+                        ),
+                    ),
+                    Product(
+                        Var(
+                            Query(
+                                QueryBack {
+                                    index: 3,
+                                    column_index: 4,
+                                    column_type: Advice,
+                                    rotation: Rotation(
+                                        1,
+                                    ),
+                                },
+                            ),
+                        ),
+                        Var(
+                            Query(
+                                QueryBack {
+                                    index: 4,
+                                    column_index: 0,
+                                    column_type: Advice,
+                                    rotation: Rotation(
+                                        -1,
+                                    ),
+                                },
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+            Product(
+                Var(
+                    Query(
+                        QueryBack {
+                            index: 5,
+                            column_index: 5,
+                            column_type: Fixed,
+                            rotation: Rotation(
+                                0,
+                            ),
+                        },
+                    ),
+                ),
+                Sum(
+                    Var(
+                        Query(
+                            QueryBack {
+                                index: 0,
+                                column_index: 1,
+                                column_type: Advice,
+                                rotation: Rotation(
+                                    0,
+                                ),
+                            },
+                        ),
+                    ),
+                    Negated(
+                        Var(
+                            Query(
+                                QueryBack {
+                                    index: 0,
+                                    column_index: 0,
+                                    column_type: Instance,
+                                    rotation: Rotation(
+                                        0,
+                                    ),
+                                },
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        ],
+        advice_queries: [
+            (
+                ColumnMid {
+                    column_type: Advice,
+                    index: 1,
+                },
+                Rotation(
+                    0,
+                ),
+            ),
+            (
+                ColumnMid {
+                    column_type: Advice,
+                    index: 2,
+                },
+                Rotation(
+                    0,
+                ),
+            ),
+            (
+                ColumnMid {
+                    column_type: Advice,
+                    index: 3,
+                },
+                Rotation(
+                    0,
+                ),
+            ),
+            (
+                ColumnMid {
+                    column_type: Advice,
+                    index: 4,
+                },
+                Rotation(
+                    1,
+                ),
+            ),
+            (
+                ColumnMid {
+                    column_type: Advice,
+                    index: 0,
+                },
+                Rotation(
+                    -1,
+                ),
+            ),
+            (
+                ColumnMid {
+                    column_type: Advice,
+                    index: 0,
+                },
+                Rotation(
+                    0,
+                ),
+            ),
+            (
+                ColumnMid {
+                    column_type: Advice,
+                    index: 4,
+                },
+                Rotation(
+                    0,
+                ),
+            ),
+        ],
+        instance_queries: [
+            (
+                ColumnMid {
+                    column_type: Instance,
+                    index: 0,
+                },
+                Rotation(
+                    0,
+                ),
+            ),
+        ],
+        fixed_queries: [
+            (
+                ColumnMid {
+                    column_type: Fixed,
+                    index: 2,
+                },
+                Rotation(
+                    0,
+                ),
+            ),
+            (
+                ColumnMid {
+                    column_type: Fixed,
+                    index: 3,
+                },
+                Rotation(
+                    0,
+                ),
+            ),
+            (
+                ColumnMid {
+                    column_type: Fixed,
+                    index: 1,
+                },
+                Rotation(
+                    0,
+                ),
+            ),
+            (
+                ColumnMid {
+                    column_type: Fixed,
+                    index: 4,
+                },
+                Rotation(
+                    0,
+                ),
+            ),
+            (
+                ColumnMid {
+                    column_type: Fixed,
+                    index: 0,
+                },
+                Rotation(
+                    0,
+                ),
+            ),
+            (
+                ColumnMid {
+                    column_type: Fixed,
+                    index: 5,
+                },
+                Rotation(
+                    0,
+                ),
+            ),
+            (
+                ColumnMid {
+                    column_type: Fixed,
+                    index: 6,
+                },
+                Rotation(
+                    0,
+                ),
+            ),
+        ],
+        permutation: ArgumentMid {
+            columns: [
+                ColumnMid {
+                    column_type: Advice,
+                    index: 1,
+                },
+                ColumnMid {
+                    column_type: Advice,
+                    index: 2,
+                },
+                ColumnMid {
+                    column_type: Advice,
+                    index: 3,
+                },
+                ColumnMid {
+                    column_type: Fixed,
+                    index: 0,
+                },
+                ColumnMid {
+                    column_type: Advice,
+                    index: 0,
+                },
+                ColumnMid {
+                    column_type: Advice,
+                    index: 4,
+                },
+                ColumnMid {
+                    column_type: Instance,
+                    index: 0,
+                },
+                ColumnMid {
+                    column_type: Fixed,
+                    index: 1,
+                },
+                ColumnMid {
+                    column_type: Fixed,
+                    index: 2,
+                },
+                ColumnMid {
+                    column_type: Fixed,
+                    index: 3,
+                },
+                ColumnMid {
+                    column_type: Fixed,
+                    index: 4,
+                },
+                ColumnMid {
+                    column_type: Fixed,
+                    index: 5,
+                },
+            ],
+        },
+        lookups: [
+            Argument {
+                "#,
+                pinned_vk_lookup_type_specifics,
+                r#"
+                table_expressions: [
+                    Var(
+                        Query(
+                            QueryBack {
+                                index: 6,
+                                column_index: 6,
+                                column_type: Fixed,
+                                rotation: Rotation(
+                                    0,
+                                ),
+                            },
+                        ),
+                    ),
+                ],
+            },
+        ],
+        shuffles: [],
+        minimum_degree: None,
+    },
+    fixed_commitments: [
+        (0x2bbc94ef7b22aebef24f9a4b0cc1831882548b605171366017d45c3e6fd92075, 0x082b801a6e176239943bfb759fb02138f47a5c8cc4aa7fa0af559fde4e3abd97),
+        (0x2bf5082b105b2156ed0e9c5b8e42bf2a240b058f74a464d080e9585274dd1e84, 0x222ad83cee7777e7a160585e212140e5e770dd8d1df788d869b5ee483a5864fb),
+        (0x374a656456a0aae7429b23336f825752b575dd5a44290ff614946ee59d6a20c0, 0x054491e187e6e3460e7601fb54ae10836d34d420026f96316f0c5c62f86db9b8),
+        (0x374a656456a0aae7429b23336f825752b575dd5a44290ff614946ee59d6a20c0, 0x054491e187e6e3460e7601fb54ae10836d34d420026f96316f0c5c62f86db9b8),
+        (0x02e62cd68370b13711139a08cbcdd889e800a272b9ea10acc90880fff9d89199, 0x1a96c468cb0ce77065d3a58f1e55fea9b72d15e44c01bba1e110bd0cbc6e9bc6),
+        (0x224ef42758215157d3ee48fb8d769da5bddd35e5929a90a4a89736f5c4b5ae9b, 0x11bc3a1e08eb320cde764f1492ecef956d71e996e2165f7a9a30ad2febb511c1),
+        (0x2d5415bf917fcac32bfb705f8ca35cb12d9bad52aa33ccca747350f9235d3a18, 0x2b2921f815fad504052512743963ef20ed5b401d20627793b006413e73fe4dd4),
+    ],
+    permutation: VerifyingKey {
+        commitments: [
+            (0x1347b4b385837977a96b87f199c6a9a81520015539d1e8fa79429bb4ca229a00, 0x2168e404cabef513654d6ff516cde73f0ba87e3dc84e4b940ed675b5f66f3884),
+            (0x0e6d69cd2455ec43be640f6397ed65c9e51b1d8c0fd2216339314ff37ade122a, 0x222ed6dc8cfc9ea26dcc10b9d4add791ada60f2b5a63ee1e4635f88aa0c96654),
+            (0x13c447846f48c41a5e0675ccf88ebc0cdef2c96c51446d037acb866d24255785, 0x1f0b5414fc5e8219dbfab996eed6129d831488b2386a8b1a63663938903bd63a),
+            (0x1aae6470aa662b8fda003894ddef5fedd03af318b3231683039d2fac9cab05b9, 0x08832d91ae69e99cd07d096c7a4a284a69e6a16227cbb07932a0cdc56914f3a6),
+            (0x0850521b0f8ac7dd0550fe3e25c840837076e9635067ed623b81d5cbac5944d9, 0x0c25d65d1038d0a92c72e5fccd96c1caf07801c3c8233290bb292e0c38c256fa),
+            (0x12febcf696badd970750eabf75dd3ced4c2f54f93519bcee23849025177d2014, 0x0a05ab3cd42c9fbcc1bbfcf9269951640cc9920761c87cf8e211ba73c8d9f90f),
+            (0x053904bdde8cfead3b517bb4f6ded3e699f8b94ca6156a9dd2f92a2a05a7ec5a, 0x16753ff97c0d82ff586bb7a07bf7f27a92df90b3617fa5e75d4f55c3b0ef8711),
+            (0x3804548f6816452747a5b542fa5656353fc989db40d69e9e27d6f973b5deebb0, 0x389a44d5037866dd83993af75831a5f90a18ad5244255aa5bd2c922cc5853055),
+            (0x003a9f9ca71c7c0b832c802220915f6fc8d840162bdde6b0ea05d25fb95559e3, 0x091247ca19d6b73887cd7f68908cbf0db0b47459b7c82276bbdb8a1c937e2438),
+            (0x3eaa38689d9e391c8a8fafab9568f20c45816321d38f309d4cc37f4b1601af72, 0x247f8270a462ea88450221a56aa6b55d2bc352b80b03501e99ea983251ceea13),
+            (0x394437571f9de32dccdc546fd4737772d8d92593c85438aa3473243997d5acc8, 0x14924ec6e3174f1fab7f0ce7070c22f04bbd0a0ecebdfc5c94be857f25493e95),
+            (0x3d907e0591343bd285c2c846f3e871a6ac70d80ec29e9500b8cb57f544e60202, 0x1034e48df35830244cabea076be8a16d67d7896e27c6ac22b285d017105da9c3),
+        ],
+    },
+}"#)
+            );
+        }
     }
 
     test_plonk_api_ipa();

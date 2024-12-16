@@ -1,6 +1,14 @@
-# halo2 [![Crates.io](https://img.shields.io/crates/v/halo2.svg)](https://crates.io/crates/halo2) #
+# halo2 [![codecov](https://codecov.io/github/privacy-scaling-explorations/halo2/graph/badge.svg?token=6WX7KBHFIP)](https://codecov.io/github/privacy-scaling-explorations/halo2)
 
 ## [Documentation](https://privacy-scaling-explorations.github.io/halo2/halo2_proofs)
+
+This repository contains the [halo2](https://github.com/zcash/halo2) fork from
+PSE and includes contributions from the community.
+
+We use the `main` branch for development, which means it may contain
+unstable/unfinished features.  For end-users we recomend using the tag releases
+which can be seen as curated checkpoints with some level of guarantee of
+stability.
 
 For experimental features `privacy-scaling-explorations/halo2` fork adds, please refer to [`experimental-features.md`](./book/src/user/experimental-features.md).
 

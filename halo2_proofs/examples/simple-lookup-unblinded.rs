@@ -22,6 +22,7 @@ use halo2_proofs::{
 };
 
 use std::marker::PhantomData;
+use halo2_backend::poly::kzg::commitment::ParamsVerifierKZG;
 
 const K: u32 = 10;
 
@@ -112,7 +113,7 @@ fn main() {
             &self,
             config: MyConfig,
             mut layouter: impl Layouter<F>,
-        ) -> Result<(), Error> {
+        ) -> Result<(), ErrorFront> {
             layouter.assign_table(
                 || "8-bit 2x table",
                 |mut table| {
@@ -212,7 +213,7 @@ fn main() {
             params,
             pk,
             &[circuit],
-            &[&[instances.as_slice()]],
+            &[vec![instances]],
             rng,
             &mut transcript,
         )
@@ -220,7 +221,7 @@ fn main() {
         transcript.finalize()
     }
 
-    fn verifier(params: &ParamsKZG<Bn256>, vk: &VerifyingKey<G1Affine>, proof: &[u8]) {
+    fn verifier(params: &ParamsVerifierKZG<Bn256>, vk: &VerifyingKey<G1Affine>, proof: &[u8]) {
         let strategy = SingleStrategy::new(params);
         let mut transcript = Blake2bRead::<_, _, Challenge255<G1Affine>>::init(proof);
 
@@ -230,15 +231,15 @@ fn main() {
 
         assert!(verify_proof::<
             KZGCommitmentScheme<Bn256>,
-            VerifierGWC<'_, Bn256>,
+            VerifierGWC<Bn256>,
             Challenge255<G1Affine>,
             Blake2bRead<&[u8], G1Affine, Challenge255<G1Affine>>,
-            SingleStrategy<'_, Bn256>,
+            SingleStrategy<Bn256>,
         >(
             params,
             vk,
             strategy,
-            &[&[instances.as_slice()]],
+            &[vec![instances]],
             &mut transcript,
             params.n(),
         )
@@ -269,17 +270,12 @@ fn main() {
 
     let f = std::fs::File::open(path).unwrap();
     let mut reader = std::io::BufReader::new(f);
-    #[cfg(feature = "circuit-params")]
-    let pk = ProvingKey::<G1Affine>::read::<_, MyCircuit<Fr>>(
+    let pk = pk_read(
         &mut reader,
         halo2_proofs::SerdeFormat::RawBytes,
-        (),
-    )
-    .unwrap();
-    #[cfg(not(feature = "circuit-params"))]
-    let pk = ProvingKey::<G1Affine>::read::<_, MyCircuit<Fr>>(
-        &mut reader,
-        halo2_proofs::SerdeFormat::RawBytes,
+        K,
+        &MyCircuit::<Fr>::default(),
+        true,
     )
     .unwrap();
 
@@ -299,17 +295,12 @@ fn main() {
 
     let f = std::fs::File::open(path).unwrap();
     let mut reader = std::io::BufReader::new(f);
-    #[cfg(feature = "circuit-params")]
-    let vk = VerifyingKey::<G1Affine>::read::<_, MyCircuit<Fr>>(
+    let vk = vk_read(
         &mut reader,
         halo2_proofs::SerdeFormat::RawBytes,
-        (),
-    )
-    .unwrap();
-    #[cfg(not(feature = "circuit-params"))]
-    let vk = VerifyingKey::<G1Affine>::read::<_, MyCircuit<Fr>>(
-        &mut reader,
-        halo2_proofs::SerdeFormat::RawBytes,
+        K,
+        &MyCircuit::<Fr>::default(),
+        true,
     )
     .unwrap();
 
@@ -322,7 +313,7 @@ fn main() {
     // time it
     println!("verifier");
     let start = instant::Instant::now();
-    verifier(&params, &vk, &proof);
+    verifier(&params.verifier_params(), &vk, &proof);
     let end = instant::Instant::now();
     println!("verifier time: {:?}", end.duration_since(start));
 }

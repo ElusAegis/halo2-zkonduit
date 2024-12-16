@@ -3,8 +3,9 @@
 use ff::{Field, PrimeField, PrimeFieldBits};
 use halo2_proofs::{
     circuit::{AssignedCell, Cell, Layouter, Value},
-    plonk::{Advice, Column, Error, Expression},
+    plonk::{Advice, Column, Expression},
 };
+use halo2_proofs::plonk::ErrorFront as Error;
 use std::marker::PhantomData;
 use std::ops::Range;
 
@@ -240,9 +241,10 @@ mod tests {
     use halo2_proofs::{
         circuit::{Layouter, SimpleFloorPlanner},
         dev::{FailureLocation, MockProver, VerifyFailure},
-        plonk::{Any, Circuit, ConstraintSystem, Constraints, Error, Selector},
+        plonk::{Any, Circuit, ConstraintSystem, Constraints, Selector},
         poly::Rotation,
     };
+    use halo2_proofs::plonk::ErrorFront as Error;
     use halo2curves::pasta::pallas;
     use proptest::prelude::*;
     use rand::rngs::OsRng;
@@ -327,7 +329,7 @@ mod tests {
                         region: (0, "range constrain").into(),
                         offset: 0,
                     },
-                    cell_values: vec![(((Any::advice(), 0).into(), 0).into(), "0x8".to_string())],
+                    cell_values: vec![((Column { column_type: Any::Advice, index: 0 }.into(), 0).into(), "0x8".to_string())],
                 }])
             );
         }

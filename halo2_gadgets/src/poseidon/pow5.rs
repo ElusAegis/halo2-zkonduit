@@ -5,11 +5,11 @@ use halo2_proofs::{
     arithmetic::Field,
     circuit::{AssignedCell, Cell, Chip, Layouter, Region, Value},
     plonk::{
-        Advice, Any, Column, ConstraintSystem, Constraints, Error, Expression, Fixed, Selector,
+        Advice, Any, Column, ConstraintSystem, Constraints, Expression, Fixed, Selector,
     },
     poly::Rotation,
 };
-
+use halo2_proofs::plonk::ErrorFront as Error;
 use super::{
     primitives::{Absorbing, Domain, Mds, Spec, Squeezing, State},
     PaddedWord, PoseidonInstructions, PoseidonSpongeInstructions,
@@ -588,8 +588,9 @@ mod tests {
     use halo2_proofs::{
         circuit::{Layouter, SimpleFloorPlanner, Value},
         dev::MockProver,
-        plonk::{Circuit, ConstraintSystem, Error},
+        plonk::{Circuit, ConstraintSystem},
     };
+    use halo2_proofs::plonk::ErrorFront as Error;
     use halo2curves::pasta::{pallas, Fp};
     use rand::rngs::OsRng;
 
@@ -773,7 +774,7 @@ mod tests {
                             config.state[i],
                             0,
                             || value,
-                        )
+                        ).into()
                     };
 
                     let message: Result<Vec<_>, Error> = (0..L).map(message_word).collect();
@@ -798,7 +799,7 @@ mod tests {
                     )?;
                     region.constrain_equal(output.cell(), expected_var.cell())
                 },
-            )
+            ).into()
         }
     }
 
