@@ -5,6 +5,8 @@
 use super::icicle;
 #[cfg(feature = "icicle_gpu")]
 use std::env;
+use std::sync::{Mutex, Once};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use super::multicore;
 pub use ff::Field;
 use group::{
@@ -15,6 +17,7 @@ use group::{
 
 use halo2curves::msm::msm_best;
 pub use halo2curves::{CurveAffine, CurveExt};
+use log::{info, warn};
 
 /// This represents an element of a group with basic operations that can be
 /// performed. This allows an FFT implementation (for example) to operate
@@ -45,8 +48,86 @@ pub fn best_multiexp<C: CurveAffine>(
         best_multiexp_cpu(coeffs, bases)
     }
 
-    #[cfg(not(feature = "icicle_gpu"))]
-    best_multiexp_cpu(coeffs, bases)
+    static CONCURRENT_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+    // Increment the concurrent call counter
+    let current_calls = CONCURRENT_CALLS.fetch_add(1, Ordering::SeqCst) + 1;
+    info!("Concurrent MSM calls: {}", current_calls);
+
+
+    #[cfg(feature = "metal")]
+    if coeffs.len() >= 2_usize.pow(17) {
+        use once_cell::sync::Lazy;
+        use mopro_msm::metal::abstraction::limbs_conversion::h2c::{H2GAffine, H2G, H2Fr};
+
+        // Static mutex to block concurrent Metal acceleration calls
+        static METAL_MUTEX: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+        static PRINT_ONCE: Once = Once::new();
+
+        // Block other threads from executing Metal code path
+        let _guard = METAL_MUTEX.lock().expect("Failed to lock METAL_MUTEX");
+
+        // Print the warning message only once
+        PRINT_ONCE.call_once(|| {
+            warn!(
+                "WARNING: Using Experimental Metal Acceleration for MSM. \
+                 Best performance improvements are observed with log row size >= 20. \
+                 Current log size: {}",
+                coeffs.len().ilog2()
+            );
+        });
+
+        // Start the timer
+        let start = instant::Instant::now();
+
+        // Perform MSM using Metal acceleration
+        let res = mopro_msm::metal::msm_best::<C, H2GAffine, H2G, H2Fr>(coeffs, bases);
+
+        // Calculate and log elapsed time
+        let elapsed = start.elapsed();
+        info!(
+            "Finished GPU-based MSM {}. Took {:?}. Concurrent calls: {}.",
+            bases.len().ilog2(), elapsed, current_calls
+        );
+
+        // Decrement the concurrent call counter
+        CONCURRENT_CALLS.fetch_sub(1, Ordering::SeqCst);
+
+        return res;
+    } else {
+        // CPU-based MSM
+        let start = instant::Instant::now();
+        let res = best_multiexp_cpu(coeffs, bases);
+        let elapsed = start.elapsed();
+
+        info!(
+            "Finished CPU-based MSM {}. Took {:?}. Concurrent calls: {}.",
+            bases.len().ilog2(), elapsed, current_calls
+        );
+
+        // Decrement the concurrent call counter
+        CONCURRENT_CALLS.fetch_sub(1, Ordering::SeqCst);
+
+        return res;
+    }
+
+    #[cfg(all(not(feature = "icicle_gpu"), not(feature = "metal")))]
+    {
+        // CPU-based MSM
+        let start = instant::Instant::now();
+        let res = best_multiexp_cpu(coeffs, bases);
+        let elapsed = start.elapsed();
+
+        info!(
+            "Finished CPU-based MSM {}. Took {:?}. Concurrent calls: {}.",
+            bases.len().ilog2(), elapsed, current_calls
+        );
+
+        // Decrement the concurrent call counter
+        CONCURRENT_CALLS.fetch_sub(1, Ordering::SeqCst);
+
+        return res;
+    }
 }
 
 // [JPW] Keep this adapter to halo2curves to minimize code changes.
@@ -56,25 +137,6 @@ pub fn best_multiexp<C: CurveAffine>(
 ///
 /// This will use multithreading if beneficial.
 pub fn best_multiexp_cpu<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C]) -> C::Curve {
-    #[cfg(feature = "metal")]
-    if coeffs.len() >= 2_usize.pow(17) {
-        static PRINT_ONCE: Once = Once::new();
-
-        PRINT_ONCE.call_once(|| {
-            log::warn!(
-                "WARNING: Using Experimental Metal Acceleration for MSM. \
-                 Best performance improvements are observed with log row size >= 20. \
-                 Current log size: {}",
-                coeffs.len().ilog2()
-            );
-        });
-
-        use mopro_msm::metal::abstraction::limbs_conversion::h2c::{H2GAffine, H2G, H2Fr};
-        mopro_msm::metal::msm_best::<C, H2GAffine, H2G, H2Fr>(coeffs, bases)
-    } else {
-        msm_best(coeffs, bases)
-    }
-    #[cfg(not(feature = "metal"))]
     msm_best(coeffs, bases)
 }
 
