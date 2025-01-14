@@ -5,8 +5,9 @@
 use super::icicle;
 #[cfg(feature = "icicle_gpu")]
 use std::env;
-use std::sync::{Mutex, Once};
 use std::sync::atomic::{AtomicUsize, Ordering};
+#[cfg(feature = "metal")]
+use std::sync::Once;
 use super::multicore;
 pub use ff::Field;
 use group::{
@@ -17,7 +18,6 @@ use group::{
 
 use halo2curves::msm::msm_best;
 pub use halo2curves::{CurveAffine, CurveExt};
-use log::{info, warn};
 
 /// This represents an element of a group with basic operations that can be
 /// performed. This allows an FFT implementation (for example) to operate
@@ -52,24 +52,19 @@ pub fn best_multiexp<C: CurveAffine>(
 
     // Increment the concurrent call counter
     let current_calls = CONCURRENT_CALLS.fetch_add(1, Ordering::SeqCst) + 1;
-    info!("Concurrent MSM calls: {}", current_calls);
+    log::debug!("Concurrent MSM calls: {}", current_calls);
 
 
     #[cfg(feature = "metal")]
-    if coeffs.len() >= 2_usize.pow(17) {
-        use once_cell::sync::Lazy;
+    {
         use mopro_msm::metal::abstraction::limbs_conversion::h2c::{H2GAffine, H2G, H2Fr};
 
         // Static mutex to block concurrent Metal acceleration calls
-        static METAL_MUTEX: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
         static PRINT_ONCE: Once = Once::new();
-
-        // Block other threads from executing Metal code path
-        let _guard = METAL_MUTEX.lock().expect("Failed to lock METAL_MUTEX");
 
         // Print the warning message only once
         PRINT_ONCE.call_once(|| {
-            warn!(
+            log::warn!(
                 "WARNING: Using Experimental Metal Acceleration for MSM. \
                  Best performance improvements are observed with log row size >= 20. \
                  Current log size: {}",
@@ -85,23 +80,8 @@ pub fn best_multiexp<C: CurveAffine>(
 
         // Calculate and log elapsed time
         let elapsed = start.elapsed();
-        info!(
+        log::info!(
             "Finished GPU-based MSM {}. Took {:?}. Concurrent calls: {}.",
-            bases.len().ilog2(), elapsed, current_calls
-        );
-
-        // Decrement the concurrent call counter
-        CONCURRENT_CALLS.fetch_sub(1, Ordering::SeqCst);
-
-        return res;
-    } else {
-        // CPU-based MSM
-        let start = instant::Instant::now();
-        let res = best_multiexp_cpu(coeffs, bases);
-        let elapsed = start.elapsed();
-
-        info!(
-            "Finished CPU-based MSM {}. Took {:?}. Concurrent calls: {}.",
             bases.len().ilog2(), elapsed, current_calls
         );
 
@@ -111,14 +91,14 @@ pub fn best_multiexp<C: CurveAffine>(
         return res;
     }
 
-    #[cfg(all(not(feature = "icicle_gpu"), not(feature = "metal")))]
+    #[allow(unreachable_code)]
     {
         // CPU-based MSM
         let start = instant::Instant::now();
         let res = best_multiexp_cpu(coeffs, bases);
         let elapsed = start.elapsed();
 
-        info!(
+        log::info!(
             "Finished CPU-based MSM {}. Took {:?}. Concurrent calls: {}.",
             bases.len().ilog2(), elapsed, current_calls
         );
